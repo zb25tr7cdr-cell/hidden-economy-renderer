@@ -1,4 +1,0 @@
-version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Free FFmpeg renderer for The Hidden Economy documentary pipeline, run on GitHub Actions.
