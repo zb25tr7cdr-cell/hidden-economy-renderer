@@ -20,19 +20,19 @@ function download(url, dest) {
 
 function buildSegment(scene, assets, workdir, out, fast) {
   const dur = Math.max(1, Math.round((scene.end_sec || 0) - (scene.start_sec || 0)));
-  const W = 1280, H = 720;
+  const W = 1920, H = 1080;
   const font = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
-  const preset = 'ultrafast';
-  const crf = fast ? 28 : 26;
+  const preset = fast ? 'fast' : 'medium';
+  const crf = fast ? 23 : 20;
 
   const vf = [`scale=${W}:${H}:force_original_aspect_ratio=increase`, `crop=${W}:${H}`];
   if (scene.on_screen_text) {
     const textFile = join(workdir, `text_${scene.index}.txt`);
     writeFileSync(textFile, scene.on_screen_text);
-    vf.push(`drawtext=fontfile=${font}:textfile=${textFile}:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=18:x=(w-text_w)/2:y=h-text_h-60`);
+    vf.push(`drawtext=fontfile=${font}:textfile=${textFile}:fontsize=54:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=24:x=(w-text_w)/2:y=h-text_h-80`);
   }
   if (scene.transition === 'fade') {
-    vf.push('fade=t=in:st=0:d=0.3', `fade=t=out:st=${Math.max(0, dur - 0.3)}:d=0.3`);
+    vf.push('fade=t=in:st=0:d=0.4', `fade=t=out:st=${Math.max(0, dur - 0.4)}:d=0.4`);
   }
   const vfArg = vf.join(',');
 
