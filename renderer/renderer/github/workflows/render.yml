@@ -1,0 +1,59 @@
+name: Render Video
+
+on:
+  repository_dispatch:
+    types: [render_video]
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure FFmpeg
+        run: |
+          which ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          ffmpeg -version
+
+      - name: Render MP4
+        id: render
+        env:
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_TOKEN: ${{ github.event.client_payload.callback_token }}
+          BUNDLE_PATH: render-jobs/${{ github.event.client_payload.job_id }}/bundle.json
+        run: node renderer/render.js
+
+      - name: Upload MP4 to a GitHub Release
+        id: release
+        env:
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="render-${JOB_ID}"
+          gh release create "$TAG" final.mp4 \
+            --title "Render ${JOB_ID}" \
+            --notes "Auto-rendered 1080p MP4 for job ${JOB_ID}" \
+            --repo "$GITHUB_REPOSITORY"
+          MP4_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/final.mp4"
+          echo "mp4_url=$MP4_URL" >> "$GITHUB_OUTPUT"
+          echo "MP4 available at: $MP4_URL"
+
+      - name: Notify app (success)
+        if: success()
+        env:
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_TOKEN: ${{ github.event.client_payload.callback_token }}
+          MP4_URL: ${{ steps.release.outputs.mp4_url }}
+        run: node renderer/callback.js done "$MP4_URL" "MP4 rendered via GitHub Actions." || true
+
+      - name: Notify app (failure)
+        if: failure()
+        env:
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_TOKEN: ${{ github.event.client_payload.callback_token }}
+        run: node renderer/callback.js failed "" "GitHub Action render failed — check the run logs." || true
