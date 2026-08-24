@@ -18,19 +18,14 @@ function download(url, dest) {
   }
 }
 
-function buildSegment(scene, assets, workdir, out, fast) {
-  const dur = Math.max(1, Math.round((scene.end_sec || 0) - (scene.start_sec || 0)));
+function buildSegment(scene, assets, workdir, out, fast, dur) {
+  dur = Math.max(1, Math.round(dur || (scene.end_sec || 0) - (scene.start_sec || 0)));
   const W = 1920, H = 1080;
   const font = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
   const preset = fast ? 'fast' : 'medium';
   const crf = fast ? 23 : 20;
 
   const vf = [`scale=${W}:${H}:force_original_aspect_ratio=increase`, `crop=${W}:${H}`];
-  if (scene.on_screen_text) {
-    const textFile = join(workdir, `text_${scene.index}.txt`);
-    writeFileSync(textFile, scene.on_screen_text);
-    vf.push(`drawtext=fontfile=${font}:textfile=${textFile}:fontsize=54:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=24:x=(w-text_w)/2:y=h-text_h-80`);
-  }
   if (scene.transition === 'fade') {
     vf.push('fade=t=in:st=0:d=0.4', `fade=t=out:st=${Math.max(0, dur - 0.4)}:d=0.4`);
   }
@@ -68,10 +63,49 @@ function runRender(bundle, workdir, fast) {
     if (download(v.url, p)) audioSegs.push(p);
   }
 
+  // Build one continuous narration track and probe its REAL length. The script's
+  // start_sec/end_sec are estimates that drift out of sync with the TTS audio;
+  // the audio is the master clock for the whole video.
+  const audioPath = join(workdir, 'audio.m4a');
+  let audioTotal = 0;
+  if (audioSegs.length) {
+    const aList = join(workdir, 'audio_list.txt');
+    writeFileSync(aList, audioSegs.map((f) => `file '${f}'`).join('\n'));
+    execFileSync('ffmpeg', ['-f', 'concat', '-safe', '0', '-i', aList, '-c:a', 'aac', audioPath], { stdio: 'inherit' });
+    try {
+      const probe = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audioPath], { encoding: 'utf8' });
+      audioTotal = parseFloat(String(probe).trim()) || 0;
+    } catch (e) { audioTotal = 0; }
+  }
+
+  // Re-time each scene to the REAL audio length so visuals + on-screen text stay
+  // locked to the spoken words. Weights prefer narration word counts (most accurate
+  // pacing) and fall back to the script's start_sec/end_sec estimates, then scale
+  // every weight to the probed audio total. Works for every project regardless of
+  // whether narration text or timing fields are present.
+  const scenes = bundle.scenes || [];
+  const estDurs = scenes.map((s) => Math.max(1, Math.round((s.end_sec || 0) - (s.start_sec || 0))));
+  const wordCounts = scenes.map((s) => {
+    const words = (s.narration || '').trim().match(/\S+/g) || [];
+    return words.length;
+  });
+  const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+  const weights = totalWords > 0 ? wordCounts.map((w) => Math.max(w, 1)) : estDurs;
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  let durs;
+  if (audioTotal > 0 && weightSum > 0) {
+    durs = weights.map((w) => Math.max(1, Math.round((w / weightSum) * audioTotal)));
+    const drift = Math.round(audioTotal) - durs.reduce((a, b) => a + b, 0);
+    if (scenes.length) durs[scenes.length - 1] = Math.max(1, durs[scenes.length - 1] + drift);
+  } else {
+    durs = estDurs;
+  }
+
   const segFiles = [];
-  for (const sc of (bundle.scenes || [])) {
+  for (let i = 0; i < scenes.length; i++) {
+    const sc = scenes[i];
     const out = join(segDir, `seg_${String(sc.index).padStart(3, '0')}.mp4`);
-    buildSegment(sc, assets, workdir, out, fast);
+    buildSegment(sc, assets, workdir, out, fast, durs[i] || 1);
     segFiles.push(out);
   }
 
@@ -81,11 +115,7 @@ function runRender(bundle, workdir, fast) {
   execFileSync('ffmpeg', ['-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', videoPath], { stdio: 'inherit' });
 
   let finalPath = videoPath;
-  if (audioSegs.length) {
-    const aList = join(workdir, 'audio_list.txt');
-    writeFileSync(aList, audioSegs.map((f) => `file '${f}'`).join('\n'));
-    const audioPath = join(workdir, 'audio.m4a');
-    execFileSync('ffmpeg', ['-f', 'concat', '-safe', '0', '-i', aList, '-c:a', 'aac', audioPath], { stdio: 'inherit' });
+  if (audioSegs.length && existsSync(audioPath)) {
     finalPath = join(workdir, 'final.mp4');
     execFileSync('ffmpeg', ['-i', videoPath, '-i', audioPath, '-c', 'copy', '-shortest', finalPath], { stdio: 'inherit' });
   }
